@@ -1,0 +1,71 @@
+name: Android UnCrackable Lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk:
+        description: 'APK filename in apks/ folder to test (e.g. uncrackable-l1.apk)'
+        required: true
+        default: 'uncrackable-l1.apk'
+
+jobs:
+  run-lab:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install Python deps (frida-tools)
+        run: pip3 install frida-tools frida
+
+      - name: Run emulator and lab steps
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: default
+          arch: x86_64
+          profile: pixel_5
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            echo "== Device check =="
+            adb devices
+            adb root
+            adb wait-for-device
+
+            echo "== Download frida-server =="
+            curl -fL -o frida-server.xz "https://github.com/frida/frida/releases/download/16.3.3/frida-server-16.3.3-android-x86_64.xz"
+            file frida-server.xz
+            xz -d frida-server.xz
+            adb push frida-server /data/local/tmp/frida-server
+            adb shell "chmod 755 /data/local/tmp/frida-server"
+            adb shell "/data/local/tmp/frida-server &" &
+            sleep 5
+
+            echo "== Install target APK =="
+            adb install -r "apks/${{ github.event.inputs.apk }}"
+
+            echo "== List installed packages matching uncrackable =="
+            adb shell pm list packages | grep -i uncrackable || true
+
+            echo "== Launch app (adjust package/activity per level) =="
+            adb shell monkey -p owasp.mstg.uncrackable1 -c android.intent.category.LAUNCHER 1 || true
+            sleep 5
+
+            echo "== Frida process list =="
+            frida-ps -U || true
+
+            echo "Environment ready. Add your frida script run / adb logcat capture here next."
